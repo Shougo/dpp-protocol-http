@@ -9,6 +9,18 @@ export type Params = Record<string, never>;
 
 export type Attrs = Record<string, never>;
 
+// helper: typical archive/file extensions
+const archiveExts = [
+  ".bz2",
+  ".gz",
+  ".tar",
+  ".tar.bz2",
+  ".tar.gz",
+  ".tar.xz",
+  ".tgz",
+  ".zip",
+];
+
 export class Protocol extends BaseProtocol<Params> {
   override async detect(args: {
     denops: Denops;
@@ -16,20 +28,13 @@ export class Protocol extends BaseProtocol<Params> {
     protocolOptions: ProtocolOptions;
     protocolParams: Params;
   }): Promise<Partial<Plugin> | undefined> {
-    if (!args.plugin.repo || !args.plugin.repo.match(/^https?:\/\//)) {
+    const normalized = normalizeHttpUrl(args.plugin.repo);
+    if (!normalized) {
+      // Not a valid http(s) URL we can handle
       return;
     }
 
-    if (
-      !args.plugin.repo.match(
-        /\/\/(raw|gist)\.githubusercontent\.com\/|\/archive\/[^\/]+.zip$/,
-      )
-    ) {
-      // Raw repository
-      return;
-    }
-
-    const url = args.plugin.repo;
+    const url = normalized;
 
     return {
       path: `${await vars.g.get(
@@ -45,28 +50,93 @@ export class Protocol extends BaseProtocol<Params> {
   }
 }
 
-export function getDirectoryName(url: string): string {
+export function normalizeHttpUrl(repo?: string): string | undefined {
+  if (!repo) return undefined;
+  let raw = repo.trim();
+
+  // Allow "git+https://" prefix and normalize it away.
+  if (raw.toLowerCase().startsWith("git+")) {
+    raw = raw.slice(4);
+  }
+
+  // Quick reject for obviously non-URLs
+  if (!/^https?:\/\//i.test(raw)) return undefined;
+
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+
+    // Remove credentials for safety
+    u.username = "";
+    u.password = "";
+
+    const host = u.hostname.toLowerCase();
+    const pathname = u.pathname || "";
+    const segs = pathname.split("/").filter(Boolean);
+
+    const endsWithArchiveExt = archiveExts.some((e) =>
+      pathname.toLowerCase().endsWith(e)
+    );
+
+    // Accept criteria (only these are allowed):
+    // 1) raw.githubusercontent.com direct file URLs (single file)
+    if (host === "raw.githubusercontent.com" && segs.length > 0) {
+      return u.toString();
+    }
+
+    // 2) URLs that end with archive extensions (.zip, .tar.gz, etc.)
+    if (endsWithArchiveExt) {
+      return u.toString();
+    }
+
+    // 3) GitHub releases assets: /<owner>/<repo>/releases/download/<tag>/<asset>
+    if (
+      host.includes("github.com") && segs.includes("releases") &&
+      segs.includes("download")
+    ) {
+      return u.toString();
+    }
+
+    // 4) Archive patterns:
+    //    - GitHub: /<owner>/<repo>/archive/...
+    //    - GitLab: /<owner>/<repo>/-/archive/...
+    if (
+      segs.includes("archive") ||
+      (segs.includes("-") && segs.includes("archive"))
+    ) {
+      return u.toString();
+    }
+
+    // 5) Bitbucket "get" pattern: /<owner>/<repo>/get/...
+    if (host.includes("bitbucket.org") && segs.includes("get")) {
+      return u.toString();
+    }
+
+    // 6) explicit raw path on github.com: /<owner>/<repo>/raw/<branch>/path/to/file
+    if (host.includes("github.com") && segs.includes("raw")) {
+      return u.toString();
+    }
+
+    // Otherwise reject (this excludes plain repo roots like https://github.com/owner/repo)
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getDirectoryName(url: string): string {
   const removeExt = (name: string) => {
-    const exts = [
-      ".tar.gz",
-      ".tar.bz2",
-      ".tar.xz",
-      ".tar",
-      ".tgz",
-      ".zip",
-      ".gz",
-      ".bz2",
-    ];
     const lower = name.toLowerCase();
-    for (const e of exts) {
-      if (lower.endsWith(e)) return name.slice(0, -e.length);
+    for (const e of archiveExts) {
+      if (lower.endsWith(e)) {
+        return name.slice(0, -e.length);
+      }
     }
     const i = name.lastIndexOf(".");
     return i > 0 ? name.slice(0, i) : name;
   };
 
   const stripHexRef = (name: string) => {
-    // Remove trailing -<hexcommit> if present (7+ hex chars)
     return name.replace(/-[0-9a-f]{7,40}$/i, "");
   };
 
@@ -75,38 +145,27 @@ export function getDirectoryName(url: string): string {
     const host = u.hostname.toLowerCase();
     const segs = u.pathname.split("/").filter(Boolean);
 
-    // raw content URLs -> use filename without extension
     if (host === "raw.githubusercontent.com" && segs.length > 0) {
       return removeExt(segs[segs.length - 1]);
     }
 
-    // If there's an "archive" segment, handle both GitHub and GitLab patterns:
-    // - GitHub: /owner/repo/archive/...
-    // - GitLab: /owner/repo/-/archive/...
     const archiveIdx = segs.indexOf("archive");
     if (archiveIdx > 0) {
-      // if the segment before "archive" is "-" (gitlab), repo is two segments
-      // before
       if (segs[archiveIdx - 1] === "-" && archiveIdx - 2 >= 0) {
         return segs[archiveIdx - 2];
       }
       return segs[archiveIdx - 1];
     }
 
-    // Bitbucket: /owner/repo/get/...
     if (host.includes("bitbucket.org") && segs.length >= 2) {
       return segs[1];
     }
 
-    // GitLab general case: /owner/repo/...
     if (host.includes("gitlab.com") && segs.length >= 2) {
       return segs[1];
     }
 
-    // GitHub general cases
     if (host.includes("github.com") && segs.length >= 2) {
-      // If URL explicitly points to a raw file on github.com like
-      // /<owner>/<repo>/raw/<branch>/path/to/file -> return filename
       const rawIdx = segs.indexOf("raw");
       if (rawIdx >= 0 && segs.length > rawIdx + 1) {
         return removeExt(segs[segs.length - 1]);
@@ -114,19 +173,14 @@ export function getDirectoryName(url: string): string {
       return segs[1];
     }
 
-    // Fallback: use last path segment sans extension and strip hex ref if
-    // present
     if (segs.length > 0) {
       let last = removeExt(segs[segs.length - 1]);
       last = stripHexRef(last);
       return last;
     }
 
-    // final fallback: hostname
     return host;
   } catch {
-    // Best-effort fallback for non-URL inputs: use last path token and remove
-    // extension
     const parts = url.split("/").filter(Boolean);
     if (parts.length === 0) return url;
     const lastRaw = parts[parts.length - 1].split("?")[0].split("#")[0];
@@ -172,4 +226,85 @@ Deno.test("fallback filename with hex ref stripped", () => {
 Deno.test("non-url input fallback", () => {
   const input = "some/path/to/file.ext";
   assertEquals(getDirectoryName(input), "file");
+});
+
+Deno.test("rejects plain repo root (no archive/file)", () => {
+  const inUrl = "https://github.com/owner/repo";
+  assertEquals(normalizeHttpUrl(inUrl), undefined);
+});
+
+Deno.test("valid http url with archive extension", () => {
+  const inUrl = "http://example.com/path/to/file.zip";
+  assertEquals(normalizeHttpUrl(inUrl), "http://example.com/path/to/file.zip");
+});
+
+Deno.test("git+https prefix is normalized for archive/file URL", () => {
+  const inUrl =
+    "git+https://github.com/owner/repo/releases/download/v1.0.0/asset.tar.gz";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://github.com/owner/repo/releases/download/v1.0.0/asset.tar.gz",
+  );
+});
+
+Deno.test("rejects ssh-style repo", () => {
+  const inUrl = "git@github.com:owner/repo.git";
+  assertEquals(normalizeHttpUrl(inUrl), undefined);
+});
+
+Deno.test("rejects non-http protocol", () => {
+  const inUrl = "ftp://example.com/repo.zip";
+  assertEquals(normalizeHttpUrl(inUrl), undefined);
+});
+
+Deno.test("rejects plain owner/repo shorthand", () => {
+  const inUrl = "owner/repo";
+  assertEquals(normalizeHttpUrl(inUrl), undefined);
+});
+
+Deno.test("removes credentials from url", () => {
+  const inUrl = "https://user:pass@example.com/path/to/res.zip";
+  assertEquals(normalizeHttpUrl(inUrl), "https://example.com/path/to/res.zip");
+});
+
+Deno.test("case-insensitive scheme and host normalization", () => {
+  const inUrl = "HTTPs://Example.COM/a/archive/asset.ZIP";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://example.com/a/archive/asset.ZIP",
+  );
+});
+
+Deno.test("accepts raw.githubusercontent file URL", () => {
+  const inUrl =
+    "https://raw.githubusercontent.com/Shougo/repo/master/vim/colors/candy.vim";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://raw.githubusercontent.com/Shougo/repo/master/vim/colors/candy.vim",
+  );
+});
+
+Deno.test("accepts github releases asset", () => {
+  const inUrl =
+    "https://github.com/owner/repo/releases/download/v1.0.0/asset.tar.gz";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://github.com/owner/repo/releases/download/v1.0.0/asset.tar.gz",
+  );
+});
+
+Deno.test("accepts gitlab archive pattern", () => {
+  const inUrl = "https://gitlab.com/foo/bar/-/archive/main/bar-main.zip";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://gitlab.com/foo/bar/-/archive/main/bar-main.zip",
+  );
+});
+
+Deno.test("accepts bitbucket get pattern", () => {
+  const inUrl = "https://bitbucket.org/spilt/vim-peg/get/c6be9c909538.zip";
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://bitbucket.org/spilt/vim-peg/get/c6be9c909538.zip",
+  );
 });

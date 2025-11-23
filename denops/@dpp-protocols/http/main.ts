@@ -227,6 +227,11 @@ Deno.test("fallback filename with hex ref stripped", () => {
   assertEquals(getDirectoryName(url), "mylib");
 });
 
+Deno.test("fallback plain zip file", () => {
+  const url = "https://example.com/downloads/foo.zip";
+  assertEquals(getDirectoryName(url), "foo");
+});
+
 Deno.test("non-url input fallback", () => {
   const input = "some/path/to/file.ext";
   assertEquals(getDirectoryName(input), "file");
@@ -312,3 +317,12 @@ Deno.test("accepts bitbucket get pattern", () => {
     "https://bitbucket.org/spilt/vim-peg/get/c6be9c909538.zip",
   );
 });
+
+Deno.test("accepts plain zip file", () => {
+  const url = "https://example.com/downloads/foo.zip";
+  assertEquals(
+    normalizeHttpUrl(url),
+    "https://example.com/downloads/foo.zip",
+  );
+});
+

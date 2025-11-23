@@ -89,7 +89,8 @@ export function normalizeHttpUrl(repo?: string): string | undefined {
       return u.toString();
     }
 
-    // 3) GitHub releases assets: /<owner>/<repo>/releases/download/<tag>/<asset>
+    // 3) GitHub releases assets:
+    //    - /<owner>/<repo>/releases/download/<tag>/<asset>
     if (
       host.includes("github.com") && segs.includes("releases") &&
       segs.includes("download")
@@ -107,17 +108,20 @@ export function normalizeHttpUrl(repo?: string): string | undefined {
       return u.toString();
     }
 
-    // 5) Bitbucket "get" pattern: /<owner>/<repo>/get/...
+    // 5) Bitbucket "get" pattern:
+    //    - /<owner>/<repo>/get/...
     if (host.includes("bitbucket.org") && segs.includes("get")) {
       return u.toString();
     }
 
-    // 6) explicit raw path on github.com: /<owner>/<repo>/raw/<branch>/path/to/file
+    // 6) explicit raw path on github.com:
+    //    - /<owner>/<repo>/raw/<branch>/path/to/file
     if (host.includes("github.com") && segs.includes("raw")) {
       return u.toString();
     }
 
-    // Otherwise reject (this excludes plain repo roots like https://github.com/owner/repo)
+    // Otherwise reject
+    // (this excludes plain repo roots like https://github.com/owner/repo)
     return undefined;
   } catch {
     return undefined;

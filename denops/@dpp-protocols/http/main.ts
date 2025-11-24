@@ -1,9 +1,10 @@
 import type { Plugin, ProtocolOptions } from "@shougo/dpp-vim/types";
-import { BaseProtocol } from "@shougo/dpp-vim/protocol";
+import { BaseProtocol, type Command } from "@shougo/dpp-vim/protocol";
 import { assertEquals } from "@std/assert/equals";
 
 import type { Denops } from "@denops/std";
 import * as vars from "@denops/std/variable";
+import * as fn from "@denops/std/function";
 
 export type Params = Record<string, never>;
 
@@ -43,6 +44,127 @@ export class Protocol extends BaseProtocol<Params> {
       )}/repos/${getDirectoryName(url)}`,
       url,
     };
+  }
+
+  override async getSyncCommands(args: {
+    denops: Denops;
+    plugin: Plugin;
+    protocolOptions: ProtocolOptions;
+    protocolParams: Params;
+  }): Promise<Command[]> {
+    const repo = args.plugin.repo;
+    const dest = args.plugin.path;
+    if (!repo || !dest) return [];
+
+    // Check URL
+    let url: string;
+    try {
+      const u = new URL(repo.trim());
+      if (u.protocol !== "http:" && u.protocol !== "https:") return [];
+      u.username = "";
+      u.password = "";
+      url = u.toString();
+    } catch {
+      return [];
+    }
+
+    const commands: Command[] = [];
+    const isArchive = looksLikeArchiveUrl(url);
+    const pathname = new URL(url).pathname;
+    const kind = archiveKindByExts(pathname);
+
+    if (isArchive) {
+      commands.push({ command: "mkdir", args: ["-p", dest] });
+    } else {
+      commands.push({ command: "mkdir", args: ["-p", requireDirname(dest)] });
+    }
+
+    const executable = async (cmd: string) => {
+      try {
+        const r = await fn.executable(args.denops, cmd);
+        return r === 1;
+      } catch {
+        return false;
+      }
+    };
+
+    const hasCurl = await executable("curl");
+    const hasWget = await executable("wget");
+
+    if (!hasCurl && !hasWget) {
+      return [];
+    }
+
+    if (isArchive) {
+      const tmpfile = makeTmpFilePath("plugin");
+
+      if (hasCurl) {
+        commands.push({
+          command: "curl",
+          args: ["-L", "--fail", "-sSf", "-o", tmpfile, url],
+        });
+      } else if (hasWget) {
+        commands.push({ command: "wget", args: ["-q", "-O", tmpfile, url] });
+      }
+
+      const hasUnzip = await executable("unzip");
+      const hasTar = await executable("tar");
+      const hasPython3 = await executable("python3");
+
+      if (kind === "zip") {
+        if (!hasUnzip && !hasPython3) return [];
+
+        if (hasUnzip) {
+          commands.push({
+            command: "unzip",
+            args: ["-o", tmpfile, "-d", dest],
+          });
+        } else if (hasPython3) {
+          commands.push({
+            command: "python3",
+            args: ["-m", "zipfile", "-e", tmpfile, dest],
+          });
+        }
+      } else {
+        // tar-like
+        if (!hasTar && !hasPython3) return [];
+
+        if (hasTar) {
+          commands.push({
+            command: "tar",
+            args: ["-xf", tmpfile, "-C", dest, "--strip-components=1"],
+          });
+        } else if (hasPython3) {
+          commands.push({
+            command: "python3",
+            args: [
+              "-c",
+              "import tarfile,sys\nf=tarfile.open(sys.argv[1]); f.extractall(sys.argv[2])",
+              tmpfile,
+              dest,
+            ],
+          });
+        }
+      }
+
+      // Cleanup (rm)
+      const hasRm = await executable("rm");
+      if (hasRm) {
+        commands.push({ command: "rm", args: ["-f", tmpfile] });
+      }
+
+      return commands;
+    } else {
+      if (hasCurl) {
+        commands.push({
+          command: "curl",
+          args: ["-L", "--fail", "-sSf", "-o", dest, url],
+        });
+      } else if (hasWget) {
+        commands.push({ command: "wget", args: ["-q", "-O", dest, url] });
+      }
+      return commands;
+    }
   }
 
   override params(): Params {
@@ -195,6 +317,100 @@ function getDirectoryName(url: string): string {
   }
 }
 
+// sort extensions by length desc to match `.tar.gz` before `.gz`
+const sortedArchiveExts = [...archiveExts].sort((a, b) => b.length - a.length);
+
+function isArchiveByExtFromPath(pathname: string): boolean {
+  const lower = pathname.toLowerCase();
+  return sortedArchiveExts.some((e) => lower.endsWith(e));
+}
+
+/**
+ * Determine archive kind using archiveExts.
+ * Returns:
+ *  - "zip" for .zip
+ *  - "tar" for tar-like extensions: .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz
+ *  - undefined for single-stream compressions like .gz/.bz2 (treated as file by default)
+ */
+export function archiveKindByExts(pathname: string): "zip" | "tar" | undefined {
+  const lower = pathname.toLowerCase();
+  for (const ext of sortedArchiveExts) {
+    if (lower.endsWith(ext)) {
+      if (ext === ".zip") return "zip";
+      if (
+        ext === ".tar" ||
+        ext === ".tar.gz" ||
+        ext === ".tgz" ||
+        ext === ".tar.bz2" ||
+        ext === ".tar.xz"
+      ) {
+        return "tar";
+      }
+      return undefined; // .gz/.bz2 etc.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Heuristic to recognize download/archive-y URLs beyond just extension.
+ */
+function looksLikeArchiveUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    const pathname = u.pathname || "";
+    // explicit archive extension
+    if (isArchiveByExtFromPath(pathname)) return true;
+
+    const segs = pathname.split("/").filter(Boolean);
+    // common archive/download patterns
+    if (segs.includes("archive")) return true;
+    if (segs.includes("releases") && segs.includes("download")) return true;
+    if (segs.includes("get")) return true;
+
+    // raw.githubusercontent typically single-file; treat as archive only if extension suggests so
+    if (u.hostname.toLowerCase() === "raw.githubusercontent.com") {
+      return isArchiveByExtFromPath(pathname);
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function makeTmpFilePath(prefix = "plugin"): string {
+  // This creates an actual temporary file and returns its path.
+  try {
+    const tmpDir = Deno.env.get("TMPDIR") ??
+      Deno.env.get("TMP") ??
+      Deno.env.get("TEMP") ??
+      "/tmp";
+
+    // Deno.makeTempFileSync will create and return a unique temp file path.
+    // Provide a prefix so files look like "plugin.<random>"
+    return Deno.makeTempFileSync({ dir: tmpDir, prefix: `${prefix}.` });
+  } catch {
+    // Fallback: deterministic non-colliding name if temp APIs are unavailable.
+    const tmpDir = "/tmp";
+    const rand = Math.floor(Math.random() * 0xffffffff).toString(36);
+    const ts = Date.now();
+    return `${tmpDir}/${prefix}.${ts}.${rand}`;
+  }
+}
+
+/**
+ * Minimal dirname implementation.
+ */
+function requireDirname(path: string): string {
+  if (!path) return ".";
+  const p = path.replace(/[\/\\]+$/, "");
+  const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  if (idx === -1) return ".";
+  const dir = p.slice(0, idx) || "/";
+  return dir;
+}
+
 Deno.test("github archive -> repo name", () => {
   const url =
     "https://github.com/Shougo/dpp-protocol-git/archive/refs/heads/main.zip";
@@ -325,4 +541,3 @@ Deno.test("accepts plain zip file", () => {
     "https://example.com/downloads/foo.zip",
   );
 });
-

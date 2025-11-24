@@ -31,9 +31,17 @@ https://httphub.com/Shougo/dpp.vim
 https://httphub.com/vim-denops/denops.vim
 
 
+NOTE: To download plugins, "curl" or "wget" is required.
+
 ==============================================================================
 EXAMPLES                                          *dpp-protocol-http-examples*
 >
+>typescript
+  args.contextBuilder.setGlobal({
+    protocols: [
+      "http",
+    ],
+  });
 <
 
 ==============================================================================

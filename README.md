@@ -19,9 +19,9 @@ https://github.com/Shougo/dpp.vim
 ## Configuration
 
 ```typescript
-  args.contextBuilder.setGlobal({
-    protocols: [
-      "http",
-    ],
-  });
+args.contextBuilder.setGlobal({
+  protocols: [
+    "http",
+  ],
+});
 ```

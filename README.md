@@ -20,6 +20,8 @@ The downloader accepts plugin URLs in these forms:
 Plain repository root URLs like `https://github.com/owner/repo` are
 intentionally rejected — only archives or single-file URLs are supported.
 
+NOTE: The protocol does not support version lock and rollback.
+
 ## Required
 
 NOTE: To download plugins, "curl" or "wget" is required.

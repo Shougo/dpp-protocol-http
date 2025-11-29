@@ -37,8 +37,51 @@ The downloader accepts plugin URLs in these forms:
   - `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/path/to/file.vim`
   NOTE: these are downloaded as a single file
 
-Plain repository root URLs like `https://github.com/owner/repo` are
-intentionally rejected — only archives or single-file URLs are supported.
+Notes about plain repo roots and revisions (rev)
+
+- Plain repository root URLs such as `https://github.com/owner/repo` are now
+  accepted and will be normalized to an archive download URL:
+  `https://github.com/owner/repo/archive/refs/heads/<rev>.zip`.
+  - If no revision is provided, the downloader uses a default of `main`.
+  - You can supply a revision (branch, tag, or commit SHA) - the `rev`
+    parameter - to select a specific branch/tag/commit (e.g. `dev-branch`,
+    `v1.2.3`, or a commit SHA).
+  - If the repository's default branch is not `main`, either pass the correct
+    `rev`, or enable an option that queries the remote API to discover the
+    repository's default branch (this implementation currently uses the
+    provided `rev` or `main` by default).
+- If an input URL already points to an archive path (e.g.
+  `.../archive/refs/heads/main.zip`) and a `rev` is provided, the code will
+  attempt to replace the referenced ref with the supplied `rev` where
+  possible.
+
+Other handling
+
+- `git+https://` prefix is normalized away (e.g. `git+https://github.com/...`
+  -> `https://github.com/...`).
+- URLs that already end with known archive extensions (zip/tar.* etc.),
+  archive patterns, release assets, raw file URLs, and Bitbucket `get` URLs
+  are returned as-is (possibly with credentials removed and host normalized to
+  lowercase).
+- SSH-style URLs (`git@github.com:owner/repo.git`) and owner/repo shorthand
+  (`owner/repo`) are not treated as downloadable HTTP URLs by this downloader.
+
+Supported hosts and patterns
+
+- GitHub (archive, releases/download, explicit `raw` paths, plain repo roots)
+- GitLab (archive patterns like `/-/archive/...`)
+- Bitbucket (the `/get/` pattern)
+- Generic direct archive URLs on arbitrary hosts
+- raw.githubusercontent.com single-file URLs
+
+Limitations
+
+- This approach downloads and extracts archives or single files; it does not
+  perform `git clone`. Plugins that require git metadata, submodules, or other
+  repository operations may not work correctly.
+- If you rely on automatic default-branch detection, consider enabling an API
+  lookup to avoid incorrect assumptions about `main` vs `master` (not enabled
+  by default).
 
 NOTE: The protocol does not support version lock and rollback.
 

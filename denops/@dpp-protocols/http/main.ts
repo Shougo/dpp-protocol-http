@@ -249,7 +249,7 @@ export class Protocol extends BaseProtocol<Params> {
   }
 }
 
-function normalizeHttpUrl(repo?: string): string | undefined {
+function normalizeHttpUrl(repo?: string, rev?: string): string | undefined {
   if (!repo) return undefined;
   let raw = repo.trim();
 
@@ -272,19 +272,38 @@ function normalizeHttpUrl(repo?: string): string | undefined {
     const host = u.hostname.toLowerCase();
     const pathname = u.pathname || "";
     const segs = pathname.split("/").filter(Boolean);
+    const branch = rev && rev.length > 0 ? rev : "main";
 
     const endsWithArchiveExt = archiveExts.some((e) =>
       pathname.toLowerCase().endsWith(e)
     );
 
-    // Accept criteria (only these are allowed):
     // 1) raw.githubusercontent.com direct file URLs (single file)
     if (host === "raw.githubusercontent.com" && segs.length > 0) {
       return u.toString();
     }
 
-    // 2) URLs that end with archive extensions (.zip, .tar.gz, etc.)
+    // 2) URLs that already end with archive extensions (.zip, .tar.gz, etc.)
     if (endsWithArchiveExt) {
+      // If rev provided and the path includes an "archive" segment, try to replace the archive ref
+      if (rev && segs.includes("archive")) {
+        // Replace final archive ref with rev (preserving refs/heads style if present)
+        const archiveIdx = segs.indexOf("archive");
+        let newSegs: string[];
+        if (segs[archiveIdx + 1] === "refs") {
+          // preserve .../archive/refs/... and replace final segment
+          newSegs = segs.slice(0, segs.length - 1).concat([
+            `${encodeURIComponent(branch)}.zip`,
+          ]);
+        } else {
+          // generic .../archive/<ref>.zip
+          newSegs = segs.slice(0, archiveIdx + 1).concat([
+            `${encodeURIComponent(branch)}.zip`,
+          ]);
+        }
+        u.pathname = "/" + newSegs.join("/");
+        return u.toString();
+      }
       return u.toString();
     }
 
@@ -304,6 +323,27 @@ function normalizeHttpUrl(repo?: string): string | undefined {
       segs.includes("archive") ||
       (segs.includes("-") && segs.includes("archive"))
     ) {
+      if (rev) {
+        const archiveIdx = segs.indexOf("archive");
+        // If GitLab style '/-/archive', archiveIdx points to 'archive' and segs[archiveIdx-1] === '-'
+        // Try to preserve existing structure, but replace final archive ref with the provided rev.
+        if (archiveIdx >= 0) {
+          let newSegs: string[];
+          if (segs[archiveIdx + 1] === "refs") {
+            // .../archive/refs/heads/<name>.zip  => replace last segment
+            newSegs = segs.slice(0, segs.length - 1).concat([
+              `${encodeURIComponent(branch)}.zip`,
+            ]);
+          } else {
+            // .../archive/<name>.zip  => put rev as last segment
+            newSegs = segs.slice(0, archiveIdx + 1).concat([
+              `${encodeURIComponent(branch)}.zip`,
+            ]);
+          }
+          u.pathname = "/" + newSegs.join("/");
+          return u.toString();
+        }
+      }
       return u.toString();
     }
 
@@ -319,8 +359,17 @@ function normalizeHttpUrl(repo?: string): string | undefined {
       return u.toString();
     }
 
+    // 7) Plain GitHub repo root: accept and convert to an archive URL.
+    //    Use provided rev when available (branch/tag/sha).
+    if (host.includes("github.com") && segs.length === 2) {
+      const owner = segs[0];
+      const repoName = stripGitSuffix(segs[1]);
+      return `https://${host}/${owner}/${repoName}/archive/refs/heads/${
+        encodeURIComponent(branch)
+      }.zip`;
+    }
+
     // Otherwise reject
-    // (this excludes plain repo roots like https://github.com/owner/repo)
     return undefined;
   } catch {
     return undefined;
@@ -564,9 +613,36 @@ Deno.test("non-url input fallback", () => {
   assertEquals(getDirectoryName(input), "file");
 });
 
-Deno.test("rejects plain repo root (no archive/file)", () => {
+Deno.test("plain repo root -> archive (default main)", () => {
   const inUrl = "https://github.com/owner/repo";
-  assertEquals(normalizeHttpUrl(inUrl), undefined);
+  assertEquals(
+    normalizeHttpUrl(inUrl),
+    "https://github.com/owner/repo/archive/refs/heads/main.zip",
+  );
+});
+
+Deno.test("plain repo root -> archive (with rev)", () => {
+  const inUrl = "https://github.com/owner/repo";
+  assertEquals(
+    normalizeHttpUrl(inUrl, "dev-branch"),
+    "https://github.com/owner/repo/archive/refs/heads/dev-branch.zip",
+  );
+});
+
+Deno.test("existing archive URL -> replace rev when provided", () => {
+  const inUrl = "https://github.com/owner/repo/archive/refs/heads/main.zip";
+  assertEquals(
+    normalizeHttpUrl(inUrl, "feature/xyz"),
+    "https://github.com/owner/repo/archive/refs/heads/feature%2Fxyz.zip",
+  );
+});
+
+Deno.test("existing legacy archive URL -> replace rev when provided", () => {
+  const inUrl = "https://github.com/owner/repo/archive/main.zip";
+  assertEquals(
+    normalizeHttpUrl(inUrl, "v2"),
+    "https://github.com/owner/repo/archive/v2.zip",
+  );
 });
 
 Deno.test("valid http url with archive extension", () => {

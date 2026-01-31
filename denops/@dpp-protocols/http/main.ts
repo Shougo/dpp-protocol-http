@@ -37,14 +37,13 @@ export class Protocol extends BaseProtocol<Params> {
     }
 
     const url = normalized;
-    const dirname = getDirectoryName(url);
+    const directory = getDirectoryName(url);
+
+    const basePath = await args.denops.call("dpp#util#_get_base_path");
 
     return {
-      path: `${await vars.g.get(
-        args.denops,
-        "dpp#_base_path",
-      )}/repos/${dirname}`,
-      name: basename(dirname),
+      path: `${basePath}/repos/${directory}`,
+      name: basename(directory),
       url,
     };
   }

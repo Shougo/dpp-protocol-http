@@ -3,7 +3,6 @@ import { BaseProtocol, type Command } from "@shougo/dpp-vim/protocol";
 import { assertEquals } from "@std/assert/equals";
 
 import type { Denops } from "@denops/std";
-import * as vars from "@denops/std/variable";
 import * as fn from "@denops/std/function";
 import { basename } from "@std/path/basename";
 

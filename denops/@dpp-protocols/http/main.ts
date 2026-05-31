@@ -5,6 +5,7 @@ import { assertEquals } from "@std/assert/equals";
 import type { Denops } from "@denops/std";
 import * as fn from "@denops/std/function";
 import { basename } from "@std/path/basename";
+import { crypto } from "@std/crypto";
 
 export type Params = Record<string, never>;
 
@@ -240,6 +241,43 @@ export class Protocol extends BaseProtocol<Params> {
       }
       return commands;
     }
+  }
+
+  override async getRevision(args: {
+    denops: Denops;
+    plugin: Plugin;
+    protocolParams: Params;
+  }): Promise<string> {
+    if (args.plugin.rev && args.plugin.rev.length > 0) {
+      return args.plugin.rev;
+    }
+
+    const normalized = normalizeHttpUrl(args.plugin.repo);
+    if (!normalized) {
+      // Not a valid http(s) URL we can handle
+      return "unknown";
+    }
+
+    const url = normalized;
+    const m = url.match(/[0-9a-f]{40}/); // SHA
+    if (m) return m[0];
+
+    const m2 = url.match(/archive\/refs\/heads\/([^/.]+)\.zip/); // branch
+    if (m2) return m2[1];
+
+    try {
+      return await getArchiveHash(url);
+    } catch {
+      return "unknown";
+    }
+  }
+
+  override async getRemoteRevision(args: {
+    denops: Denops;
+    plugin: Plugin;
+    protocolParams: Params;
+  }): Promise<string> {
+    return await this.getRevision(args);
   }
 
   override params(): Params {
@@ -566,6 +604,26 @@ function requireDirname(path: string): string {
   if (idx === -1) return ".";
   const dir = p.slice(0, idx) || "/";
   return dir;
+}
+
+async function getArchiveHash(url: string): Promise<string> {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch: ${url}`);
+  }
+  const data = new Uint8Array(await resp.arrayBuffer());
+  return await calculateHash(data, "SHA-1");
+}
+
+async function calculateHash(
+  data: Uint8Array,
+  algorithm: "MD5" | "SHA-1" | "SHA-256",
+): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest(algorithm, data);
+
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 Deno.test("github archive -> host/owner/repo", () => {

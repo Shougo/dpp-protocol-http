@@ -30,6 +30,11 @@ export class Protocol extends BaseProtocol<Params> {
     protocolOptions: ProtocolOptions;
     protocolParams: Params;
   }): Promise<Partial<Plugin> | undefined> {
+    if (!args.plugin.rev || args.plugin.rev.length === 0) {
+      // rev is required.
+      return;
+    }
+
     const normalized = normalizeHttpUrl(args.plugin.repo);
     if (!normalized) {
       // Not a valid http(s) URL we can handle

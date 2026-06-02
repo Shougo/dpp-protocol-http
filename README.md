@@ -56,6 +56,7 @@ Supported hosts and patterns
 
 Limitations
 
+- Revision lock is required.
 - This approach downloads and extracts archives or single files; it does not
   perform `git clone`. Plugins that require git metadata, submodules, or other
   repository operations may not work correctly.

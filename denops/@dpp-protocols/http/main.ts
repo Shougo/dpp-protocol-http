@@ -248,25 +248,14 @@ export class Protocol extends BaseProtocol<Params> {
     plugin: Plugin;
     protocolParams: Params;
   }): Promise<string> {
-    if (args.plugin.rev && args.plugin.rev.length > 0) {
-      return args.plugin.rev;
-    }
-
     const normalized = normalizeHttpUrl(args.plugin.repo);
     if (!normalized) {
       // Not a valid http(s) URL we can handle
       return "unknown";
     }
 
-    const url = normalized;
-    const m = url.match(/[0-9a-f]{40}/); // SHA
-    if (m) return m[0];
-
-    const m2 = url.match(/archive\/refs\/heads\/([^/.]+)\.zip/); // branch
-    if (m2) return m2[1];
-
     try {
-      return await getArchiveHash(url);
+      return await getArchiveHash(normalized);
     } catch {
       return "unknown";
     }

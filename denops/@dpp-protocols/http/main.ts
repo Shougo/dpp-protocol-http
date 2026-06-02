@@ -1,6 +1,6 @@
 import type { Plugin, ProtocolOptions } from "@shougo/dpp-vim/types";
 import { BaseProtocol, type Command } from "@shougo/dpp-vim/protocol";
-import { printError } from "@shougo/dpp-vim/utils";
+import { printError, safeStat } from "@shougo/dpp-vim/utils";
 import { assertEquals } from "@std/assert/equals";
 
 import type { Denops } from "@denops/std";
@@ -94,10 +94,8 @@ export class Protocol extends BaseProtocol<Params> {
     const pathname = new URL(url).pathname;
     const kind = archiveKindByExts(pathname);
 
-    if (isArchive) {
+    if (!await safeStat(dest)) {
       commands.push({ command: "mkdir", args: ["-p", dest] });
-    } else {
-      commands.push({ command: "mkdir", args: ["-p", requireDirname(dest)] });
     }
 
     const executable = async (cmd: string) => {
@@ -250,14 +248,16 @@ export class Protocol extends BaseProtocol<Params> {
 
       return commands;
     } else {
+      const destFile = `${dest}/${basename(repo)}`;
       if (hasCurl) {
         commands.push({
           command: "curl",
-          args: ["-L", "--fail", "-sSf", "-o", dest, url],
+          args: ["-L", "--fail", "-sSf", "-o", destFile, url],
         });
       } else if (hasWget) {
-        commands.push({ command: "wget", args: ["-q", "-O", dest, url] });
+        commands.push({ command: "wget", args: ["-q", "-O", destFile, url] });
       }
+      console.log(commands);
       return commands;
     }
   }
@@ -600,18 +600,6 @@ function makeTmpDirPath(prefix = "plugindir"): string {
     // attempt to create it at runtime via mkdir command later (we still return path)
     return path;
   }
-}
-
-/**
- * Minimal dirname implementation.
- */
-function requireDirname(path: string): string {
-  if (!path) return ".";
-  const p = path.replace(/[\/\\]+$/, "");
-  const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  if (idx === -1) return ".";
-  const dir = p.slice(0, idx) || "/";
-  return dir;
 }
 
 async function getArchiveHash(url: string): Promise<string> {

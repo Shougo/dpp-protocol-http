@@ -1,6 +1,7 @@
 import type { Plugin, ProtocolOptions } from "@shougo/dpp-vim/types";
 import { BaseProtocol, type Command } from "@shougo/dpp-vim/protocol";
-import { assertEquals, printError } from "@std/assert/equals";
+import { printError } from "@shougo/dpp-vim/utils";
+import { assertEquals } from "@std/assert/equals";
 
 import type { Denops } from "@denops/std";
 import * as fn from "@denops/std/function";

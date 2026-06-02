@@ -1,6 +1,6 @@
 import type { Plugin, ProtocolOptions } from "@shougo/dpp-vim/types";
 import { BaseProtocol, type Command } from "@shougo/dpp-vim/protocol";
-import { assertEquals } from "@std/assert/equals";
+import { assertEquals, printError } from "@std/assert/equals";
 
 import type { Denops } from "@denops/std";
 import * as fn from "@denops/std/function";
@@ -62,6 +62,19 @@ export class Protocol extends BaseProtocol<Params> {
     const repo = args.plugin.repo;
     const dest = args.plugin.path;
     if (!repo || !dest) return [];
+
+    // Check the revision.
+    const rev = await this.getRevision(args);
+    if (rev !== args.plugin.rev) {
+      await printError(
+        args.denops,
+        `${args.plugin.name}: Revision check failed.`,
+        `  Downloaded revision(SHA1): ${rev}`,
+        `  Specified revision(SHA1):  ${args.plugin.rev}`,
+        `  URL: ${normalizeHttpUrl(args.plugin.repo)}`,
+      );
+      return [];
+    }
 
     // Check URL
     let url: string;

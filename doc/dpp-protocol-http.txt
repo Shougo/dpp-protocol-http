@@ -76,13 +76,13 @@ Supported hosts and patterns
 
 Limitations
 
-- Revision lock is required.
+- A revision lock is required.
 - This approach downloads and extracts archives or single files; it does not
-  perform `git clone`. Plugins that require git metadata, submodules, or other
+  perform `git clone`. Plugins that require Git metadata, submodules, or other
   repository operations may not work correctly.
 - If you rely on automatic default-branch detection, consider enabling an API
-  lookup to avoid incorrect assumptions about `main` vs `master` (not enabled
-  by default).
+  lookup to avoid incorrect assumptions about `main` vs `master` (disabled by
+  default).
 
 NOTE: The protocol does not support version lock and rollback.
 

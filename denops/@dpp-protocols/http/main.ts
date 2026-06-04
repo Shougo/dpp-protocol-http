@@ -474,7 +474,8 @@ function getDirectoryName(url: string): string {
       // - general repo URLs on known hosts (github/gitlab/bitbucket)
       const segSet = new Set(segs);
       const isArchivePattern = segSet.has("archive") ||
-        (segSet.has("releases") && segSet.has("download")) || segSet.has("get");
+        (segSet.has("releases") && segSet.has("download")) ||
+        segSet.has("get");
       const knownHost = host.includes("github.com") ||
         host.includes("gitlab.com") || host.includes("bitbucket.org") ||
         host.includes("git") || host.includes("githubusercontent.com");
@@ -607,12 +608,11 @@ async function getArchiveHash(url: string): Promise<string> {
   if (!resp.ok) {
     throw new Error(`Failed to fetch: ${url}`);
   }
-  const data = new Uint8Array(await resp.arrayBuffer());
-  return await calculateHash(data, "SHA-1");
+  return await calculateHash(await resp.arrayBuffer(), "SHA-1");
 }
 
 async function calculateHash(
-  data: Uint8Array,
+  data: ArrayBuffer,
   algorithm: "MD5" | "SHA-1" | "SHA-256",
 ): Promise<string> {
   const hashBuffer = await crypto.subtle.digest(algorithm, data);
@@ -626,6 +626,12 @@ Deno.test("github archive -> host/owner/repo", () => {
   const url =
     "https://github.com/Shougo/dpp-protocol-git/archive/refs/heads/main.zip";
   assertEquals(getDirectoryName(url), "github.com/Shougo/dpp-protocol-git");
+});
+
+Deno.test("github archive -> host/owner/repo", () => {
+  const url =
+    "https://github.com/vim-fall/fall.vim/archive/refs/tags/v0.24.1.zip";
+  assertEquals(getDirectoryName(url), "github.com/vim-fall/fall.vim");
 });
 
 Deno.test("bitbucket get -> host/owner/repo", () => {

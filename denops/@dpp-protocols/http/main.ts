@@ -64,7 +64,6 @@ export class Protocol extends BaseProtocol<Params> {
     const dest = args.plugin.path;
     if (!repo || !dest) return [];
 
-    // Check the revision.
     const rev = await this.getRevision(args);
     if (rev !== args.plugin.rev) {
       await printError(
@@ -77,189 +76,32 @@ export class Protocol extends BaseProtocol<Params> {
       return [];
     }
 
-    // Check URL
-    let url: string;
-    try {
-      const u = new URL(repo.trim());
-      if (u.protocol !== "http:" && u.protocol !== "https:") return [];
-      u.username = "";
-      u.password = "";
-      url = u.toString();
-    } catch {
+    const url = this.#normalizeRepoUrl(repo);
+    if (!url) {
+      return [];
+    }
+
+    const hasCurl = await hasExecutable(args.denops, "curl");
+    const hasWget = await hasExecutable(args.denops, "wget");
+    if (!hasCurl && !hasWget) {
       return [];
     }
 
     const commands: Command[] = [];
-    const isArchive = looksLikeArchiveUrl(url);
-    const pathname = new URL(url).pathname;
-    const kind = archiveKindByExts(pathname);
 
     if (!await safeStat(dest)) {
       commands.push({ command: "mkdir", args: ["-p", dest] });
     }
 
-    const executable = async (cmd: string) => {
-      try {
-        const r = await fn.executable(args.denops, cmd);
-        return r === 1;
-      } catch {
-        return false;
-      }
-    };
-
-    const hasCurl = await executable("curl");
-    const hasWget = await executable("wget");
-
-    if (!hasCurl && !hasWget) {
-      return [];
-    }
-
-    if (isArchive) {
-      const tmpfile = makeTmpFilePath("plugin");
-      const tmpdir = makeTmpDirPath("plugindir");
-
-      if (hasCurl) {
-        commands.push({
-          command: "curl",
-          args: ["-L", "--fail", "-sSf", "-o", tmpfile, url],
-        });
-      } else if (hasWget) {
-        commands.push({ command: "wget", args: ["-q", "-O", tmpfile, url] });
-      }
-
-      const hasUnzip = await executable("unzip");
-      const hasTar = await executable("tar");
-      const hasPython3 = await executable("python3");
-      const hasRm = await executable("rm");
-
-      if (kind === "zip") {
-        // Extract into tmpdir (prefer unzip, fallback python)
-        if (!hasUnzip && !hasPython3) return [];
-
-        if (hasUnzip) {
-          commands.push({
-            command: "unzip",
-            args: ["-o", tmpfile, "-d", tmpdir],
-          });
-        } else if (hasPython3) {
-          commands.push({
-            command: "python3",
-            args: ["-m", "zipfile", "-e", tmpfile, tmpdir],
-          });
-        }
-
-        // Use a Python mover that:
-        //  - if tmpdir contains exactly one top-level directory, moves its
-        //    children into dest
-        //  - otherwise moves all top-level entries into dest
-        // Prefer python mover because it handles the "single top-level dir"
-        // case robustly.
-        if (hasPython3) {
-          const mover = [
-            "-c",
-            [
-              "import os,sys,shutil",
-              "src=sys.argv[1]",
-              "dst=sys.argv[2]",
-              "os.makedirs(dst, exist_ok=True)",
-              "entries=[e for e in os.listdir(src) if e not in ('.','..')]",
-              "if len(entries)==1 and os.path.isdir(os.path.join(src, entries[0])):",
-              "  inner=os.path.join(src, entries[0])",
-              "  for name in os.listdir(inner):",
-              "    shutil.move(os.path.join(inner,name), dst)",
-              "else:",
-              "  for name in os.listdir(src):",
-              "    shutil.move(os.path.join(src,name), dst)",
-            ].join("\n"),
-            tmpdir,
-            dest,
-          ];
-          commands.push({ command: "python3", args: mover });
-        } else {
-          // Fallback mover using cp/rsync if python3 not available
-          const hasCp = await executable("cp");
-          const hasRsync = await executable("rsync");
-          if (hasCp) {
-            commands.push({
-              command: "cp",
-              args: ["-a", `${tmpdir}/.`, dest],
-            });
-          } else if (hasRsync) {
-            commands.push({
-              command: "rsync",
-              args: ["-a", `${tmpdir}/`, dest],
-            });
-          } else {
-            return []; // No way to move contents cleanly
-          }
-        }
-      } else {
-        // tar-like
-        if (!hasTar && !hasPython3) return [];
-
-        if (hasTar) {
-          // tar with --strip-components=1 usually removes top-level folder
-          commands.push({
-            command: "tar",
-            args: ["-xf", tmpfile, "-C", dest, "--strip-components=1"],
-          });
-        } else if (hasPython3) {
-          // Python fallback - extract into tmpdir then move like zip case to
-          // handle top-level dir
-          commands.push({
-            command: "python3",
-            args: [
-              "-c",
-              "import tarfile,sys,os,shutil\nf=tarfile.open(sys.argv[1]); f.extractall(sys.argv[2])",
-              tmpfile,
-              tmpdir,
-            ],
-          });
-
-          // mover same as zip case
-          const mover = [
-            "-c",
-            [
-              "import os,sys,shutil",
-              "src=sys.argv[1]",
-              "dst=sys.argv[2]",
-              "os.makedirs(dst, exist_ok=True)",
-              "entries=[e for e in os.listdir(src) if e not in ('.','..')]",
-              "if len(entries)==1 and os.path.isdir(os.path.join(src, entries[0])):",
-              "  inner=os.path.join(src, entries[0])",
-              "  for name in os.listdir(inner):",
-              "    shutil.move(os.path.join(inner,name), dst)",
-              "else:",
-              "  for name in os.listdir(src):",
-              "    shutil.move(os.path.join(src,name), dst)",
-            ].join(";"),
-            tmpdir,
-            dest,
-          ];
-          commands.push({ command: "python3", args: mover });
-        }
-      }
-
-      // Cleanup tmpfile and tmpdir
-      if (hasRm) {
-        commands.push({ command: "rm", args: ["-f", tmpfile] });
-        commands.push({ command: "rm", args: ["-rf", tmpdir] });
-      }
-
-      return commands;
+    if (looksLikeArchiveUrl(url)) {
+      commands.push(
+        ...await buildArchiveCommands(args.denops, url, dest, hasCurl, hasWget),
+      );
     } else {
-      const destFile = `${dest}/${basename(repo)}`;
-      if (hasCurl) {
-        commands.push({
-          command: "curl",
-          args: ["-L", "--fail", "-sSf", "-o", destFile, url],
-        });
-      } else if (hasWget) {
-        commands.push({ command: "wget", args: ["-q", "-O", destFile, url] });
-      }
-      console.log(commands);
-      return commands;
+      commands.push(...this.#buildFileCommands(url, dest, hasCurl, hasWget));
     }
+
+    return commands;
   }
 
   override async getRevision(args: {
@@ -288,6 +130,41 @@ export class Protocol extends BaseProtocol<Params> {
     return await this.getRevision(args);
   }
 
+  #normalizeRepoUrl(repo: string): string | undefined {
+    try {
+      const u = new URL(repo.trim());
+      if (u.protocol !== "http:" && u.protocol !== "https:") {
+        return undefined;
+      }
+      u.username = "";
+      u.password = "";
+      return u.toString();
+    } catch {
+      return undefined;
+    }
+  }
+
+  #buildFileCommands(
+    url: string,
+    dest: string,
+    hasCurl: boolean,
+    hasWget: boolean,
+  ): Command[] {
+    const destFile = `${dest}/${basename(url)}`;
+    const commands: Command[] = [];
+
+    if (hasCurl) {
+      commands.push({
+        command: "curl",
+        args: ["-L", "--fail", "-sSf", "-o", destFile, url],
+      });
+    } else if (hasWget) {
+      commands.push({ command: "wget", args: ["-q", "-O", destFile, url] });
+    }
+
+    return commands;
+  }
+
   override params(): Params {
     return {};
   }
@@ -295,64 +172,38 @@ export class Protocol extends BaseProtocol<Params> {
 
 function normalizeHttpUrl(repo?: string, rev?: string): string | undefined {
   if (!repo) return undefined;
-  let raw = repo.trim();
 
-  // Allow "git+https://" prefix and normalize it away.
+  let raw = repo.trim();
   if (raw.toLowerCase().startsWith("git+")) {
     raw = raw.slice(4);
   }
-
-  // Quick reject for obviously non-URLs
   if (!/^https?:\/\//i.test(raw)) return undefined;
 
   try {
     const u = new URL(raw);
     if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
 
-    // Remove credentials for safety
     u.username = "";
     u.password = "";
 
     const host = u.hostname.toLowerCase();
-    const pathname = u.pathname || "";
-    const segs = pathname.split("/").filter(Boolean);
+    const segs = u.pathname.split("/").filter(Boolean);
     const branch = rev && rev.length > 0 ? rev : "main";
 
-    const endsWithArchiveExt = archiveExts.some((e) =>
-      pathname.toLowerCase().endsWith(e)
-    );
-
-    // 1) raw.githubusercontent.com direct file URLs (single file)
-    if (host === "raw.githubusercontent.com" && segs.length > 0) {
+    // raw.githubusercontent.com: keep as-is
+    if (host === "raw.githubusercontent.com") {
       return u.toString();
     }
 
-    // 2) URLs that already end with archive extensions (.zip, .tar.gz, etc.)
-    if (endsWithArchiveExt) {
-      // If rev provided and the path includes an "archive" segment, try to replace the archive ref
-      if (rev && segs.includes("archive")) {
-        // Replace final archive ref with rev (preserving refs/heads style if present)
-        const archiveIdx = segs.indexOf("archive");
-        let newSegs: string[];
-        if (segs[archiveIdx + 1] === "refs") {
-          // preserve .../archive/refs/... and replace final segment
-          newSegs = segs.slice(0, segs.length - 1).concat([
-            `${encodeURIComponent(branch)}.zip`,
-          ]);
-        } else {
-          // generic .../archive/<ref>.zip
-          newSegs = segs.slice(0, archiveIdx + 1).concat([
-            `${encodeURIComponent(branch)}.zip`,
-          ]);
-        }
-        u.pathname = "/" + newSegs.join("/");
-        return u.toString();
+    // Existing archive URLs: keep as-is unless rev is provided
+    if (isArchivePath(segs)) {
+      if (rev) {
+        return normalizeArchivePath(u, segs, branch);
       }
       return u.toString();
     }
 
-    // 3) GitHub releases assets:
-    //    - /<owner>/<repo>/releases/download/<tag>/<asset>
+    // GitHub releases download URLs: keep as-is
     if (
       host.includes("github.com") && segs.includes("releases") &&
       segs.includes("download")
@@ -360,51 +211,17 @@ function normalizeHttpUrl(repo?: string, rev?: string): string | undefined {
       return u.toString();
     }
 
-    // 4) Archive patterns:
-    //    - GitHub: /<owner>/<repo>/archive/...
-    //    - GitLab: /<owner>/<repo>/-/archive/...
-    if (
-      segs.includes("archive") ||
-      (segs.includes("-") && segs.includes("archive"))
-    ) {
-      if (rev) {
-        const archiveIdx = segs.indexOf("archive");
-        // If GitLab style '/-/archive', archiveIdx points to 'archive' and segs[archiveIdx-1] === '-'
-        // Try to preserve existing structure, but replace final archive ref with the provided rev.
-        if (archiveIdx >= 0) {
-          let newSegs: string[];
-          if (segs[archiveIdx + 1] === "refs") {
-            // .../archive/refs/heads/<name>.zip  => replace last segment
-            newSegs = segs.slice(0, segs.length - 1).concat([
-              `${encodeURIComponent(branch)}.zip`,
-            ]);
-          } else {
-            // .../archive/<name>.zip  => put rev as last segment
-            newSegs = segs.slice(0, archiveIdx + 1).concat([
-              `${encodeURIComponent(branch)}.zip`,
-            ]);
-          }
-          u.pathname = "/" + newSegs.join("/");
-          return u.toString();
-        }
-      }
-      return u.toString();
-    }
-
-    // 5) Bitbucket "get" pattern:
-    //    - /<owner>/<repo>/get/...
+    // Bitbucket get URLs: keep as-is
     if (host.includes("bitbucket.org") && segs.includes("get")) {
       return u.toString();
     }
 
-    // 6) explicit raw path on github.com:
-    //    - /<owner>/<repo>/raw/<branch>/path/to/file
+    // GitHub raw URLs: keep as-is
     if (host.includes("github.com") && segs.includes("raw")) {
       return u.toString();
     }
 
-    // 7) Plain GitHub repo root: accept and convert to an archive URL.
-    //    Use provided rev when available (branch/tag/sha).
+    // Plain GitHub repo root -> archive URL
     if (host.includes("github.com") && segs.length === 2) {
       const owner = segs[0];
       const repoName = stripGitSuffix(segs[1]);
@@ -413,11 +230,191 @@ function normalizeHttpUrl(repo?: string, rev?: string): string | undefined {
       }.zip`;
     }
 
-    // Otherwise reject
-    return undefined;
+    // Any other http(s) URL: keep as-is
+    return u.toString();
   } catch {
     return undefined;
   }
+}
+
+function normalizeArchivePath(
+  url: URL,
+  segs: string[],
+  branch: string,
+): string {
+  const archiveIdx = segs.indexOf("archive");
+  if (archiveIdx < 0) {
+    return url.toString();
+  }
+
+  let newSegs: string[];
+  if (segs[archiveIdx + 1] === "refs") {
+    newSegs = segs.slice(0, segs.length - 1).concat([
+      `${encodeURIComponent(branch)}.zip`,
+    ]);
+  } else {
+    newSegs = segs.slice(0, archiveIdx + 1).concat([
+      `${encodeURIComponent(branch)}.zip`,
+    ]);
+  }
+
+  url.pathname = "/" + newSegs.join("/");
+  return url.toString();
+}
+
+function isArchivePath(segs: string[]): boolean {
+  return segs.includes("archive") ||
+    (segs.includes("-") && segs.includes("archive"));
+}
+
+async function buildArchiveCommands(
+  denops: Denops,
+  url: string,
+  dest: string,
+  hasCurl: boolean,
+  hasWget: boolean,
+): Promise<Command[]> {
+  const commands: Command[] = [];
+  const pathname = new URL(url).pathname;
+  const kind = archiveKindByExts(pathname);
+
+  const tmpfile = makeTmpFilePath("plugin");
+  const tmpdir = makeTmpDirPath("plugindir");
+
+  if (hasCurl) {
+    commands.push({
+      command: "curl",
+      args: ["-L", "--fail", "-sSf", "-o", tmpfile, url],
+    });
+  } else if (hasWget) {
+    commands.push({
+      command: "wget",
+      args: ["-q", "-O", tmpfile, url],
+    });
+  } else {
+    return [];
+  }
+
+  if (kind === "zip") {
+    const hasUnzip = await hasExecutable(denops, "unzip");
+    const hasPython3 = await hasExecutable(denops, "python3");
+    const hasRm = await hasExecutable(denops, "rm");
+
+    if (!hasUnzip && !hasPython3) return [];
+
+    if (hasUnzip) {
+      commands.push({
+        command: "unzip",
+        args: ["-o", tmpfile, "-d", tmpdir],
+      });
+    } else {
+      commands.push({
+        command: "python3",
+        args: ["-m", "zipfile", "-e", tmpfile, tmpdir],
+      });
+    }
+
+    commands.push(...await buildMoveCommands(denops, tmpdir, dest));
+
+    if (hasRm) {
+      commands.push({ command: "rm", args: ["-f", tmpfile] });
+      commands.push({ command: "rm", args: ["-rf", tmpdir] });
+    }
+    return commands;
+  }
+
+  if (kind === "tar") {
+    const hasTar = await hasExecutable(denops, "tar");
+    const hasPython3 = await hasExecutable(denops, "python3");
+    const hasRm = await hasExecutable(denops, "rm");
+
+    if (!hasTar && !hasPython3) return [];
+
+    if (hasTar) {
+      commands.push({
+        command: "tar",
+        args: ["-xf", tmpfile, "-C", dest, "--strip-components=1"],
+      });
+    } else {
+      commands.push({
+        command: "python3",
+        args: [
+          "-c",
+          "import tarfile,sys\nf=tarfile.open(sys.argv[1]); f.extractall(sys.argv[2])",
+          tmpfile,
+          tmpdir,
+        ],
+      });
+      commands.push(...await buildMoveCommands(denops, tmpdir, dest));
+    }
+
+    if (hasRm) {
+      commands.push({ command: "rm", args: ["-f", tmpfile] });
+      commands.push({ command: "rm", args: ["-rf", tmpdir] });
+    }
+    return commands;
+  }
+
+  return [];
+}
+
+async function buildMoveCommands(
+  denops: Denops,
+  tmpdir: string,
+  dest: string,
+): Promise<Command[]> {
+  const commands: Command[] = [];
+
+  const hasPython3 = await hasExecutable(denops, "python3");
+  if (hasPython3) {
+    const mover = [
+      "-c",
+      [
+        "import os,sys,shutil",
+        "src=sys.argv[1]",
+        "dst=sys.argv[2]",
+        "os.makedirs(dst, exist_ok=True)",
+        "entries=[e for e in os.listdir(src) if e not in ('.','..')]",
+        "if len(entries)==1 and os.path.isdir(os.path.join(src, entries[0])):",
+        "  inner=os.path.join(src, entries[0])",
+        "  for name in os.listdir(inner):",
+        "    shutil.move(os.path.join(inner,name), dst)",
+        "else:",
+        "  for name in os.listdir(src):",
+        "    shutil.move(os.path.join(src,name), dst)",
+      ].join("\n"),
+      tmpdir,
+      dest,
+    ];
+    commands.push({ command: "python3", args: mover });
+    return commands;
+  }
+
+  const hasCp = await hasExecutable(denops, "cp");
+  if (hasCp) {
+    commands.push({
+      command: "cp",
+      args: ["-a", `${tmpdir}/.`, dest],
+    });
+    return commands;
+  }
+
+  const hasRsync = await hasExecutable(denops, "rsync");
+  if (hasRsync) {
+    commands.push({
+      command: "rsync",
+      args: ["-a", `${tmpdir}/`, dest],
+    });
+    return commands;
+  }
+
+  return [];
+}
+
+async function hasExecutable(denops: Denops, cmd: string): Promise<boolean> {
+  return await fn.executable(denops, cmd).then((r) => r === 1).catch(() =>
+    false
+  );
 }
 
 function removeExt(name: string): string {

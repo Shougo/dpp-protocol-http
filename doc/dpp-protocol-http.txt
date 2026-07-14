@@ -128,7 +128,7 @@ Summary:
 
 ==============================================================================
 EXAMPLES                                          *dpp-protocol-http-examples*
->
+
 >typescript
   args.contextBuilder.setGlobal({
     protocols: [

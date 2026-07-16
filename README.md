@@ -5,13 +5,12 @@ This ext implements http operations.
 The downloader accepts plugin URLs in these forms:
 
 - Archive downloads (examples):
-  - GitHub archive: `https://github.com/<owner>/<repo>/archive/.../xxx.zip`
-  - GitLab archive: `https://gitlab.com/<owner>/<repo>/-/archive/.../*.zip`
-  - Bitbucket get: `https://bitbucket.org/<owner>/<repo>/get/<hash>.zip`
+  - GitHub archive
+  - GitLab archive
+  - Bitbucket get
   - Releases/download assets:
     `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`
-  - Direct archive files: `https://example.com/path/to/foo.zip` (or
-    `.tar.gz`/`.tgz`/...)
+  - Direct archive files
   - Plain GitHub repo root: `https://github.com/<owner>/<repo>` is accepted and
     normalized to an archive URL (see notes below).
 
@@ -22,8 +21,7 @@ The downloader accepts plugin URLs in these forms:
 Notes about plain repo roots and revisions (rev)
 
 - Plain repository root URLs such as `https://github.com/owner/repo` are now
-  accepted and will be normalized to an archive download URL:
-  `https://github.com/owner/repo/archive/refs/heads/<rev>.zip`.
+  accepted and will be normalized to an archive download URL.
   - If no revision is provided, the downloader uses a default of `main`.
   - You can supply a revision (branch, tag, or commit SHA) - the `rev`
     parameter - to select a specific branch/tag/commit (e.g. `dev-branch`,
@@ -32,9 +30,9 @@ Notes about plain repo roots and revisions (rev)
     `rev`, or enable an option that queries the remote API to discover the
     repository's default branch (this implementation currently uses the provided
     `rev` or `main` by default).
-- If an input URL already points to an archive path (e.g.
-  `.../archive/refs/heads/main.zip`) and a `rev` is provided, the code will
-  attempt to replace the referenced ref with the supplied `rev` where possible.
+- If an input URL already points to an archive path and a `rev` is provided,
+  the code will attempt to replace the referenced ref with the supplied `rev`
+  where possible.
 
 Other handling
 
